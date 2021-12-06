@@ -73,7 +73,7 @@ final class LokaliseProvider implements ProviderInterface
                 $existingKeysByDomain[$domain] = [];
             }
 
-            $existingKeysByDomain[$domain] += $this->getKeysIds(array_keys($defaultCatalogue->all($domain)), $domain);
+            $existingKeysByDomain[$domain] += $this->getKeysIds([], $domain);
         }
 
         $keysToCreate = $createdKeysByDomain = [];
@@ -217,7 +217,7 @@ final class LokaliseProvider implements ProviderInterface
      * Translations will be created for keys without existing translations.
      * Translations will be updated for keys with existing translations.
      */
-    private function updateTranslations(array $keysByDomain, TranslatorBagInterface $translatorBag)
+    private function updateTranslations(array $keysByDomain, TranslatorBagInterface $translatorBag): void
     {
         $keysToUpdate = [];
 
@@ -277,14 +277,20 @@ final class LokaliseProvider implements ProviderInterface
             $this->logger->error(sprintf('Unable to get keys ids from Lokalise: "%s".', $response->getContent(false)));
         }
 
-        return array_reduce($response->toArray(false)['keys'], static function ($carry, array $keyItem) {
+
+        $keysFromResponse = $response->toArray(false)['keys'] ?? [];
+        if (count($keysFromResponse) === 0) {
+            return [];
+        }
+
+        return array_reduce($keysFromResponse, static function ($carry, array $keyItem) {
             $carry[$keyItem['key_name']['web']] = $keyItem['key_id'];
 
             return $carry;
         }, []);
     }
 
-    private function ensureAllLocalesAreCreated(TranslatorBagInterface $translatorBag)
+    private function ensureAllLocalesAreCreated(TranslatorBagInterface $translatorBag): void
     {
         $providerLanguages = $this->getLanguages();
         $missingLanguages = array_reduce($translatorBag->getCatalogues(), static function ($carry, $catalogue) use ($providerLanguages) {
