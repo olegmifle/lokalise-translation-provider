@@ -27,6 +27,8 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  *  * Filenames refers to Symfony's translation domains;
  *  * Keys refers to Symfony's translation keys;
  *  * Translations refers to Symfony's translated messages
+ *
+ * @experimental in 5.3
  */
 final class LokaliseProvider implements ProviderInterface
 {
@@ -248,28 +250,23 @@ final class LokaliseProvider implements ProviderInterface
             }
         }
 
-        $chunks = array_chunk($keysToUpdate, 500);
-        $responses = [];
+        $response = $this->client->request('PUT', 'keys', [
+            'json' => ['keys' => $keysToUpdate],
+        ]);
 
-        foreach ($chunks as $chunk) {
-            $responses[] = $this->client->request('PUT', 'keys', [
-                'json' => ['keys' => $chunk],
-            ]);
-        }
-
-        foreach ($responses as $response) {
-            if (200 !== $response->getStatusCode()) {
-                $this->logger->error(sprintf('Unable to create/update translations to Lokalise: "%s".', $response->getContent(false)));
-            }
+        if (200 !== $response->getStatusCode()) {
+            $this->logger->error(sprintf('Unable to create/update translations to Lokalise: "%s".', $response->getContent(false)));
         }
     }
 
-    private function getKeysIds(array $keys, string $domain): array
+    private function getKeysIds(array $keys, string $domain, int $page = 1, int $limit = 5000): array
     {
         $response = $this->client->request('GET', 'keys', [
             'query' => [
                 'filter_keys' => implode(',', $keys),
                 'filter_filenames' => $this->getLokaliseFilenameFromDomain($domain),
+                'limit' => $limit,
+                'page' => $page,
             ],
         ]);
 
@@ -277,17 +274,30 @@ final class LokaliseProvider implements ProviderInterface
             $this->logger->error(sprintf('Unable to get keys ids from Lokalise: "%s".', $response->getContent(false)));
         }
 
-
+        $result = [];
         $keysFromResponse = $response->toArray(false)['keys'] ?? [];
-        if (count($keysFromResponse) === 0) {
-            return [];
+
+        if (\count($keysFromResponse) > 0) {
+            $result = array_reduce($keysFromResponse, static function ($carry, array $keyItem) {
+                $carry[$keyItem['key_name']['web']] = $keyItem['key_id'];
+
+                return $carry;
+            }, []);
         }
 
-        return array_reduce($keysFromResponse, static function ($carry, array $keyItem) {
-            $carry[$keyItem['key_name']['web']] = $keyItem['key_id'];
+        $paginationTotalCount = $response->getHeaders(false)['x-pagination-total-count'] ?? [];
+        $keysTotalCount = (int) (reset($paginationTotalCount) ?? 0);
 
-            return $carry;
-        }, []);
+        if (0 === $keysTotalCount) {
+            return $result;
+        }
+
+        $pages = ceil($keysTotalCount / $limit);
+        if ($page < $pages) {
+            $result = array_merge($result, $this->getKeysIds($keys, $domain, ++$page, $limit));
+        }
+
+        return $result;
     }
 
     private function ensureAllLocalesAreCreated(TranslatorBagInterface $translatorBag): void
